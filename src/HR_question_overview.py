@@ -321,134 +321,108 @@ def format_worksheet(ws):
 
 def question_overview(plan_id, api, output_file=None):
     """
-    Export the answered questions of a DMP to an Excel workbook.
+    Export answered questions from a specific DMPonline plan.
 
-    Each DMP section gets its own worksheet.
-
-    The workbook also contains an Overview sheet.
+    Creates one Excel worksheet per DMP section, plus an Overview sheet.
+    The raw API response is used here because DMPonline.get_plan_v0()
+    returns a pandas DataFrame and therefore does not expose the nested
+    plan_content structure directly.
     """
 
-    # ---------------------------------------------------------------
-    # Retrieve the DMP
-    # ---------------------------------------------------------------
+    # Get the raw DMP response from the API.
+    parsed = api.get(
+        request='v0/plans?plan={}'.format(plan_id),
+        params={'remove_tests': 'false'}
+    )
 
-    plan = api.get_plan_v0(plan_id)
-
-    if plan is None:
+    if not parsed:
         raise ValueError(
             f"No DMP found for plan ID {plan_id}"
         )
 
-    # ---------------------------------------------------------------
-    # Get plan content
-    #
-    # get_plan_v0() in the current project returns the plan content
-    # structure used by question_overview.py.
-    # ---------------------------------------------------------------
-
+    # The API returns a list containing the plan.
     try:
-        plan_content = plan.plan_content
-    except AttributeError:
-
-        # Some versions / API responses may return a dictionary
-        # rather than an object.
-        if isinstance(plan, dict):
-            plan_content = plan.get("plan_content")
-        else:
-            raise ValueError(
-                "Could not find 'plan_content' in the DMP response."
-            )
-
-    if not plan_content:
+        plan = parsed[0]
+        plan_content = plan['plan_content'][0]
+        sections = plan_content['sections']
+    except (IndexError, KeyError, TypeError) as exc:
         raise ValueError(
-            f"DMP {plan_id} does not contain any plan content."
-        )
-
-    # ---------------------------------------------------------------
-    # Create workbook
-    # ---------------------------------------------------------------
+            "Could not find the DMP sections in the API response."
+        ) from exc
 
     workbook = Workbook()
 
-    # Remove default sheet
+    # Remove the default worksheet.
     default_sheet = workbook.active
     workbook.remove(default_sheet)
 
-    used_sheet_names = set()
+    used_sheet_names = {"Overview"}
 
-    # ---------------------------------------------------------------
-    # Overview worksheet
-    # ---------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Overview sheet
+    # ------------------------------------------------------------------
 
     overview = workbook.create_sheet("Overview")
-    used_sheet_names.add("Overview")
 
     overview["A1"] = "DMPonline DMP overview"
-    overview["A1"].font = Font(
-        bold=True,
-        size=18
-    )
+    overview["A1"].font = Font(bold=True, size=18)
 
     overview["A3"] = "Plan ID"
     overview["B3"] = plan_id
 
-    overview["A5"] = "Sections"
-    overview["B5"] = 0
+    # Add useful metadata when available.
+    overview["A4"] = "DMP title"
+    overview["B4"] = (
+        plan.get("title")
+        or plan.get("name")
+        or ""
+    )
+
+    overview["A5"] = "Template"
+    template = plan.get("template") or {}
+    overview["B5"] = template.get("title", "")
 
     overview["A7"] = "Section"
     overview["B7"] = "Worksheet"
     overview["C7"] = "Answered questions"
 
+    overview_header_fill = PatternFill(
+        fill_type="solid",
+        fgColor="1F4E78"
+    )
+
+    overview_header_font = Font(
+        bold=True,
+        color="FFFFFF"
+    )
+
+    overview_border = Border(
+        left=Side(style="thin", color="D9D9D9"),
+        right=Side(style="thin", color="D9D9D9"),
+        top=Side(style="thin", color="D9D9D9"),
+        bottom=Side(style="thin", color="D9D9D9")
+    )
+
     for cell in overview[7]:
-
-        cell.fill = PatternFill(
-            fill_type="solid",
-            fgColor="1F4E78"
-        )
-
-        cell.font = Font(
-            bold=True,
-            color="FFFFFF"
-        )
-
+        cell.fill = overview_header_fill
+        cell.font = overview_header_font
         cell.alignment = Alignment(
             vertical="center",
             wrap_text=True
         )
+        cell.border = overview_border
 
     overview_row = 8
 
-    section_count = 0
+    # ------------------------------------------------------------------
+    # One worksheet per section
+    # ------------------------------------------------------------------
 
-    # ---------------------------------------------------------------
-    # Extract sections
-    # ---------------------------------------------------------------
-
-    # The existing project accesses:
-    #
-    # plan.plan_content[0][0]['sections']
-    #
-    # Keep that structure for compatibility with the current API
-    # implementation.
-
-    try:
-        sections = plan_content[0][0]["sections"]
-
-    except (KeyError, IndexError, TypeError):
-
-        # Try a slightly less nested structure as a fallback.
-        try:
-            sections = plan_content[0]["sections"]
-        except (KeyError, IndexError, TypeError):
-            raise ValueError(
-                "Could not find sections in the DMP plan content."
-            )
-
-    for section in sections:
+    for section_index, section in enumerate(sections, start=1):
 
         section_number = section.get(
             "number",
-            section_count + 1
+            section_index
         )
 
         section_title = (
@@ -457,15 +431,9 @@ def question_overview(plan_id, api, output_file=None):
             or f"Section {section_number}"
         )
 
-        questions = section.get(
-            "questions",
-            []
-        )
+        questions = section.get("questions") or []
 
-        # -----------------------------------------------------------
-        # Keep only answered questions
-        # -----------------------------------------------------------
-
+        # Only include questions for which DMPonline says answered=True.
         answered_questions = []
 
         for question in questions:
@@ -475,21 +443,12 @@ def question_overview(plan_id, api, output_file=None):
 
             answer_text = get_answer_text(question)
 
-            # Do not throw away answers that are explicitly empty.
-            if answer_text is None:
-                continue
-
-            answered_questions.append(
-                (
-                    question,
-                    answer_text
+            if answer_text is not None:
+                answered_questions.append(
+                    (question, answer_text)
                 )
-            )
 
-        # -----------------------------------------------------------
-        # Create worksheet
-        # -----------------------------------------------------------
-
+        # Create a valid and unique Excel worksheet name.
         sheet_name = safe_sheet_name(
             f"{section_number} - {section_title}",
             used_sheet_names
@@ -497,13 +456,12 @@ def question_overview(plan_id, api, output_file=None):
 
         ws = workbook.create_sheet(sheet_name)
 
-        # -----------------------------------------------------------
-        # Section title
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Section heading
+        # ------------------------------------------------------------------
 
         ws["A1"] = (
-            f"Section {section_number}: "
-            f"{section_title}"
+            f"Section {section_number}: {section_title}"
         )
 
         ws["A1"].font = Font(
@@ -518,61 +476,38 @@ def question_overview(plan_id, api, output_file=None):
             end_column=4
         )
 
-        # -----------------------------------------------------------
-        # Number of answered questions
-        # -----------------------------------------------------------
-
         ws["A2"] = "Answered questions"
         ws["B2"] = len(answered_questions)
 
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------------
         # Table headers
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------------
 
         ws["A4"] = "Question"
         ws["B4"] = "Type"
-        ws["C4"] = "Question text"
+        ws["C4"] = "Question"
         ws["D4"] = "Answer"
-
-        # -----------------------------------------------------------
-        # Questions
-        # -----------------------------------------------------------
 
         row = 5
 
         for question, answer_text in answered_questions:
 
-            question_number = question.get(
-                "number",
-                ""
-            )
-
-            question_type = question.get(
-                "format",
-                ""
-            )
-
-            question_text = question.get(
-                "text",
-                ""
-            )
-
             ws.cell(
                 row=row,
                 column=1,
-                value=question_number
+                value=question.get("number", "")
             )
 
             ws.cell(
                 row=row,
                 column=2,
-                value=question_type
+                value=question.get("format", "")
             )
 
             ws.cell(
                 row=row,
                 column=3,
-                value=question_text
+                value=question.get("text", "")
             )
 
             ws.cell(
@@ -583,15 +518,19 @@ def question_overview(plan_id, api, output_file=None):
 
             row += 1
 
-        # -----------------------------------------------------------
-        # Format worksheet
-        # -----------------------------------------------------------
+        # ------------------------------------------------------------------
+        # Formatting
+        # ------------------------------------------------------------------
 
         format_worksheet(ws)
 
-        # -----------------------------------------------------------
-        # Add section to overview
-        # -----------------------------------------------------------
+        # Make rows containing long answers reasonably tall.
+        for data_row in range(5, ws.max_row + 1):
+            ws.row_dimensions[data_row].height = 75
+
+        # ------------------------------------------------------------------
+        # Add section to Overview
+        # ------------------------------------------------------------------
 
         overview.cell(
             row=overview_row,
@@ -611,35 +550,27 @@ def question_overview(plan_id, api, output_file=None):
             value=len(answered_questions)
         )
 
+        for column in range(1, 4):
+            overview.cell(
+                row=overview_row,
+                column=column
+            ).border = overview_border
+
         overview_row += 1
-        section_count += 1
 
-    # ---------------------------------------------------------------
-    # Finish Overview sheet
-    # ---------------------------------------------------------------
-
-    overview["B5"] = section_count
+    # ------------------------------------------------------------------
+    # Format Overview
+    # ------------------------------------------------------------------
 
     for row in overview.iter_rows():
-
         for cell in row:
-
             cell.alignment = Alignment(
                 vertical="top",
                 wrap_text=True
             )
 
-    for cell in overview[7]:
-
-        cell.border = Border(
-            left=Side(style="thin", color="D9D9D9"),
-            right=Side(style="thin", color="D9D9D9"),
-            top=Side(style="thin", color="D9D9D9"),
-            bottom=Side(style="thin", color="D9D9D9")
-        )
-
     overview.column_dimensions["A"].width = 55
-    overview.column_dimensions["B"].width = 35
+    overview.column_dimensions["B"].width = 45
     overview.column_dimensions["C"].width = 22
 
     overview.freeze_panes = "A8"
@@ -649,147 +580,84 @@ def question_overview(plan_id, api, output_file=None):
             f"A7:C{overview_row - 1}"
         )
 
-    # ---------------------------------------------------------------
-    # Save workbook
-    # ---------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Save
+    # ------------------------------------------------------------------
 
-    if output_file is not None:
-
-        extension = os.path.splitext(
-            output_file
-        )[-1].lower()
-
-        if extension != ".xlsx":
-            raise ValueError(
-                "This report format requires an .xlsx output file."
-            )
-
-        workbook.save(output_file)
-
-        logging.info(
-            f"Excel report written to {output_file}"
-        )
-
-    else:
-
-        logging.warning(
-            "No output file specified. "
+    if not output_file:
+        raise ValueError(
+            "An output Excel filename is required. "
             "Use -o filename.xlsx"
         )
 
+    extension = os.path.splitext(output_file)[-1].lower()
 
-# ---------------------------------------------------------------------------
-# Command line interface
-# ---------------------------------------------------------------------------
+    if extension != ".xlsx":
+        raise ValueError(
+            "The output file must have an .xlsx extension."
+        )
+
+    workbook.save(output_file)
+
+    logging.info(
+        f"Excel report written to {output_file}"
+    )
+
 
 def main():
-
-    logging.basicConfig(
-        stream=sys.stdout,
-        level=logging.INFO
-    )
-
     parser = argparse.ArgumentParser(
-        description=(
-            "Export answered questions from a specific "
-            "DMPonline plan to an Excel workbook."
-        )
+        description="Export answered DMPonline questions to Excel."
     )
 
-    # Required arguments
-    required_named = parser.add_argument_group(
-        "required named arguments"
-    )
-
-    required_named.add_argument(
+    parser.add_argument(
         "-i",
-        "--dmponline-plan-id",
-        type=int,
-        help="DMPonline plan ID.",
-        required=True
+        "--id",
+        dest="plan_id",
+        required=True,
+        help="DMPonline plan ID"
     )
 
-    required_named.add_argument(
+    parser.add_argument(
         "-t",
-        "--dmponline-api-token",
-        help="DMPonline API access token.",
-        required=True
+        "--token",
+        dest="token",
+        required=True,
+        help="DMPonline API token"
     )
-
-    # Optional arguments
 
     parser.add_argument(
         "-u",
-        "--dmponline-user-email",
-        default=None,
-        help=(
-            "Username (email) of user corresponding to "
-            "DMPONLINE_API_TOKEN."
-        )
-    )
-
-    parser.add_argument(
-        "--do-not-verify",
-        action="store_true",
-        help=(
-            "Disable SSL certificate verification."
-        )
-    )
-
-    parser.add_argument(
-        "-c",
-        "--cert-file",
-        default=None,
-        help="SSL certificate file."
+        "--user",
+        dest="token_user",
+        required=True,
+        help="DMPonline user email address"
     )
 
     parser.add_argument(
         "-o",
-        "--output-file",
-        default=None,
+        "--output",
         required=True,
-        help=(
-            "Output Excel file, e.g. dmp_12345.xlsx"
-        )
+        help="Output Excel filename"
     )
 
     args = parser.parse_args()
 
-    # ---------------------------------------------------------------
-    # SSL verification
-    # ---------------------------------------------------------------
-
-    if (
-        args.cert_file is not None
-        and os.path.exists(args.cert_file)
-    ):
-        verify = args.cert_file
-
-    else:
-        verify = not args.do_not_verify
-
-    logging.debug(
-        f"Calling API with verify={verify}"
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s: %(message)s"
     )
 
-    # ---------------------------------------------------------------
-    # Initialise API
-    # ---------------------------------------------------------------
-
-    dmp_api = DMPonline(
-        args.dmponline_api_token,
-        verify=verify,
-        token_user=args.dmponline_user_email
+    # Create the DMPonline API client
+    api = DMPonline(
+        token=args.token,
+        token_user=args.token_user
     )
 
-    # ---------------------------------------------------------------
-    # Generate report
-    # ---------------------------------------------------------------
-
+    # Export the DMP to Excel
     question_overview(
-        args.dmponline_plan_id,
-        dmp_api,
-        output_file=args.output_file
+        plan_id=args.plan_id,
+        api=api,
+        output_file=args.output
     )
 
 
