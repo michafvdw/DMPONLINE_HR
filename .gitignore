@@ -1,3 +1,7 @@
 .idea/
 dist/
 src/dmponline.egg-info/
+
+# Data exports
+*.xlsx
+*.csv
