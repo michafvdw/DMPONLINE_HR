@@ -13,6 +13,7 @@ from dmponline import DMPonline
 # Helper functions
 # ---------------------------------------------------------------------------
 
+
 def get_answer_text(question):
     """
     Convert the answer structure returned by DMPonline into readable text.
@@ -99,8 +100,6 @@ def get_answer_text(question):
 
                 if value is not None:
                     values.append(str(value))
-                else:
-                    values.append(str(item))
             else:
                 values.append(str(item))
 
@@ -121,17 +120,17 @@ def find_section(sections, section_number):
     return None
 
 
+# ---------------------------------------------------------------------------
+# Retrieve all DMPs
+# ---------------------------------------------------------------------------
+
+
 def get_all_plans(api, include_tests=True):
     """
     Retrieve all DMP plans available to the authenticated DMPonline
     organisation administrator.
 
-    The DMPonline v0 API paginates the plans endpoint. The current API
-    returns 20 plans per page, so we continue requesting pages until an
-    empty page is returned.
-
-    Returns:
-        list: A list of plan metadata/content dictionaries.
+    The DMPonline v0 API paginates the plans endpoint.
     """
 
     logging.info("Retrieving all DMPonline plans...")
@@ -156,8 +155,8 @@ def get_all_plans(api, include_tests=True):
             break
 
         # Normally DMPonline v0 returns a list.
-        # This also handles a dictionary containing a common data/items key,
-        # in case the API wrapper returns a paginated structure.
+        # This also handles a dictionary containing a common
+        # data/items/plans key.
         if isinstance(parsed, list):
             page_plans = parsed
 
@@ -198,6 +197,7 @@ def get_all_plans(api, include_tests=True):
 # Excel export
 # ---------------------------------------------------------------------------
 
+
 def export_all_plans_to_one_excel(
     plans,
     api,
@@ -207,14 +207,18 @@ def export_all_plans_to_one_excel(
     """
     Export the selected section from ALL DMPonline plans into ONE Excel file.
 
-    Every row represents one question from one DMP.
+    New Excel layout:
 
-    Columns:
-        Plan ID
-        Plan title
-        Question number
-        Question
-        Answer
+        A1                  B1              C1              D1
+        DMP Name + ID       Question 1      Question 2      Question 3
+
+        DMP A + ID          Answer 1        Answer 2        Answer 3
+        DMP B + ID          Answer 1        Answer 2        Answer 3
+        DMP C + ID          Answer 1        Answer 2        Answer 3
+
+    Each DMP gets one row.
+
+    The questions are placed horizontally across the columns.
     """
 
     logging.info(
@@ -226,14 +230,18 @@ def export_all_plans_to_one_excel(
     worksheet = workbook.active
     worksheet.title = "All DMPs"
 
-    # Headers
-    worksheet["A1"] = "Plan ID"
-    worksheet["B1"] = "Plan title"
-    worksheet["C1"] = "Question number"
-    worksheet["D1"] = "Question"
-    worksheet["E1"] = "Answer"
+    # -----------------------------------------------------------------------
+    # First retrieve all DMP data.
+    #
+    # We need to know ALL questions before creating the Excel columns,
+    # because different DMPs may contain different questions.
+    # -----------------------------------------------------------------------
 
-    row = 2
+    all_questions = []
+    question_keys = set()
+
+    dmp_data = []
+
     successful = 0
     failed = 0
 
@@ -304,7 +312,12 @@ def export_all_plans_to_one_excel(
                 or plan_title
             )
 
-            # Add every question from this DMP to the same worksheet.
+            # ---------------------------------------------------------------
+            # Store the questions and answers for this DMP.
+            # ---------------------------------------------------------------
+
+            answers_by_question = {}
+
             for question in questions:
 
                 question_number = question.get(
@@ -319,42 +332,42 @@ def export_all_plans_to_one_excel(
 
                 answer_text = get_answer_text(question)
 
-                worksheet.cell(
-                    row=row,
-                    column=1,
-                    value=plan_id,
+                # Create a unique column key.
+                #
+                # Including the question number makes sure that questions
+                # with identical wording are still distinguishable.
+                question_key = (
+                    f"{question_number}. {question_text}"
+                    if question_number
+                    else question_text
                 )
 
-                worksheet.cell(
-                    row=row,
-                    column=2,
-                    value=actual_plan_title,
-                )
+                answers_by_question[question_key] = answer_text
 
-                worksheet.cell(
-                    row=row,
-                    column=3,
-                    value=question_number,
-                )
+                # Add this question to the global list only once.
+                if question_key not in question_keys:
+                    question_keys.add(question_key)
 
-                worksheet.cell(
-                    row=row,
-                    column=4,
-                    value=question_text,
-                )
+                    all_questions.append(
+                        {
+                            "key": question_key,
+                            "number": question_number,
+                            "text": question_text,
+                        }
+                    )
 
-                worksheet.cell(
-                    row=row,
-                    column=5,
-                    value=answer_text,
-                )
-
-                row += 1
+            dmp_data.append(
+                {
+                    "plan_id": plan_id,
+                    "plan_title": actual_plan_title,
+                    "answers": answers_by_question,
+                }
+            )
 
             successful += 1
 
             logging.info(
-                "Plan %s exported: %s questions.",
+                "Plan %s processed: %s questions.",
                 plan_id,
                 len(questions),
             )
@@ -363,7 +376,7 @@ def export_all_plans_to_one_excel(
             failed += 1
 
             logging.error(
-                "Could not export plan %s (%s): %s",
+                "Could not process plan %s (%s): %s",
                 plan_id,
                 plan_title,
                 exc,
@@ -373,10 +386,76 @@ def export_all_plans_to_one_excel(
             continue
 
     # -----------------------------------------------------------------------
+    # Create Excel headers
+    # -----------------------------------------------------------------------
+
+    # First column contains DMP name + ID.
+    worksheet.cell(
+        row=1,
+        column=1,
+        value="DMP Name + ID",
+    )
+
+    # Every question gets its own column.
+    for column_index, question in enumerate(
+        all_questions,
+        start=2,
+    ):
+        worksheet.cell(
+            row=1,
+            column=column_index,
+            value=question["key"],
+        )
+
+    # -----------------------------------------------------------------------
+    # Add DMP rows
+    # -----------------------------------------------------------------------
+
+    for row_index, dmp in enumerate(
+        dmp_data,
+        start=2,
+    ):
+
+        plan_id = dmp["plan_id"]
+        plan_title = dmp["plan_title"]
+        answers = dmp["answers"]
+
+        # DMP name + ID
+        dmp_name_id = f"{plan_title} ({plan_id})"
+
+        worksheet.cell(
+            row=row_index,
+            column=1,
+            value=dmp_name_id,
+        )
+
+        # Answers
+        for column_index, question in enumerate(
+            all_questions,
+            start=2,
+        ):
+
+            question_key = question["key"]
+
+            answer = answers.get(
+                question_key,
+                "",
+            )
+
+            worksheet.cell(
+                row=row_index,
+                column=column_index,
+                value=answer,
+            )
+
+    # -----------------------------------------------------------------------
     # Formatting
     # -----------------------------------------------------------------------
 
-    format_combined_worksheet(worksheet)
+    format_combined_worksheet(
+        worksheet,
+        len(all_questions),
+    )
 
     # Make sure the output directory exists.
     os.makedirs(
@@ -403,9 +482,14 @@ def export_all_plans_to_one_excel(
     )
 
 
-def format_combined_worksheet(ws):
+# ---------------------------------------------------------------------------
+# Excel formatting
+# ---------------------------------------------------------------------------
+
+
+def format_combined_worksheet(ws, number_of_questions):
     """
-    Format the combined worksheet.
+    Format the new horizontal DMP worksheet.
     """
 
     header_fill = PatternFill(
@@ -418,73 +502,141 @@ def format_combined_worksheet(ws):
         color="FFFFFF",
     )
 
-    question_number_font = Font(
+    dmp_font = Font(
         bold=True,
     )
 
     thin_border = Border(
-        left=Side(style="thin", color="D9D9D9"),
-        right=Side(style="thin", color="D9D9D9"),
-        top=Side(style="thin", color="D9D9D9"),
-        bottom=Side(style="thin", color="D9D9D9"),
+        left=Side(
+            style="thin",
+            color="D9D9D9",
+        ),
+        right=Side(
+            style="thin",
+            color="D9D9D9",
+        ),
+        top=Side(
+            style="thin",
+            color="D9D9D9",
+        ),
+        bottom=Side(
+            style="thin",
+            color="D9D9D9",
+        ),
     )
 
+    # -----------------------------------------------------------------------
     # Header row
+    # -----------------------------------------------------------------------
+
     for cell in ws[1]:
+
         cell.fill = header_fill
+
         cell.font = header_font
+
         cell.alignment = Alignment(
-            horizontal="left",
+            horizontal="center",
             vertical="center",
             wrap_text=True,
         )
+
         cell.border = thin_border
 
-    ws.row_dimensions[1].height = 30
+    ws.row_dimensions[1].height = 80
 
+    # -----------------------------------------------------------------------
     # Data rows
-    for row in ws.iter_rows(min_row=2):
+    # -----------------------------------------------------------------------
+
+    for row in ws.iter_rows(
+        min_row=2,
+        max_row=ws.max_row,
+    ):
 
         for cell in row:
+
             cell.alignment = Alignment(
                 vertical="top",
+                horizontal="left",
                 wrap_text=True,
             )
 
             cell.border = thin_border
 
-        # Make question number bold.
-        row[2].font = question_number_font
+        # Make DMP name + ID bold.
+        row[0].font = dmp_font
 
+    # -----------------------------------------------------------------------
     # Column widths
-    ws.column_dimensions["A"].width = 14
-    ws.column_dimensions["B"].width = 40
-    ws.column_dimensions["C"].width = 18
-    ws.column_dimensions["D"].width = 80
-    ws.column_dimensions["E"].width = 100
+    # -----------------------------------------------------------------------
 
+    # DMP Name + ID
+    ws.column_dimensions["A"].width = 40
+
+    # Question columns
+    #
+    # The questions can be long, so 35 gives a reasonable starting point.
+    # Users can still manually resize them in Excel.
+    for column_index in range(
+        2,
+        number_of_questions + 2,
+    ):
+
+        column_letter = ws.cell(
+            row=1,
+            column=column_index,
+        ).column_letter
+
+        ws.column_dimensions[column_letter].width = 35
+
+    # -----------------------------------------------------------------------
     # Row heights
-    for row_number in range(2, ws.max_row + 1):
-        ws.row_dimensions[row_number].height = 75
+    # -----------------------------------------------------------------------
 
-    # Freeze header
-    ws.freeze_panes = "A2"
+    for row_number in range(
+        2,
+        ws.max_row + 1,
+    ):
 
+        ws.row_dimensions[row_number].height = 100
+
+    # -----------------------------------------------------------------------
+    # Freeze panes
+    #
+    # This keeps both the DMP name and question headers visible while
+    # scrolling through the spreadsheet.
+    # -----------------------------------------------------------------------
+
+    ws.freeze_panes = "B2"
+
+    # -----------------------------------------------------------------------
     # Filter
-    if ws.max_row >= 2:
-        ws.auto_filter.ref = f"A1:E{ws.max_row}"
+    # -----------------------------------------------------------------------
+
+    if ws.max_row >= 2 and number_of_questions >= 1:
+
+        last_column = ws.cell(
+            row=1,
+            column=number_of_questions + 1,
+        ).column_letter
+
+        ws.auto_filter.ref = (
+            f"A1:{last_column}{ws.max_row}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
 
     parser = argparse.ArgumentParser(
         description=(
             "Export a selected section from ALL DMPonline plans "
-            "into ONE Excel file."
+            "into ONE horizontally structured Excel file."
         )
     )
 
@@ -536,19 +688,31 @@ def main():
 
     args = parser.parse_args()
 
+    # -----------------------------------------------------------------------
     # Logging
+    # -----------------------------------------------------------------------
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s: %(message)s",
     )
 
-    # Validate output extension.
-    if os.path.splitext(args.output_file)[1].lower() != ".xlsx":
+    # -----------------------------------------------------------------------
+    # Validate output extension
+    # -----------------------------------------------------------------------
+
+    if os.path.splitext(
+        args.output_file
+    )[1].lower() != ".xlsx":
+
         raise ValueError(
             "The output file must have an .xlsx extension."
         )
 
-    # Create DMPonline API client.
+    # -----------------------------------------------------------------------
+    # Create DMPonline API client
+    # -----------------------------------------------------------------------
+
     logging.info("Connecting to DMPonline...")
 
     api = DMPonline(
@@ -556,19 +720,27 @@ def main():
         token_user=args.token_user,
     )
 
-    # Get all plans.
+    # -----------------------------------------------------------------------
+    # Get all plans
+    # -----------------------------------------------------------------------
+
     plans = get_all_plans(
         api=api,
         include_tests=not args.exclude_tests,
     )
 
     if not plans:
+
         logging.warning(
             "No plans were returned by the DMPonline API."
         )
+
         return
 
-    # Export all plans into ONE workbook.
+    # -----------------------------------------------------------------------
+    # Export all plans into ONE workbook
+    # -----------------------------------------------------------------------
+
     export_all_plans_to_one_excel(
         plans=plans,
         api=api,
@@ -581,5 +753,7 @@ def main():
 # Program entry point
 # ---------------------------------------------------------------------------
 
+
 if __name__ == "__main__":
     main()
+
