@@ -9,6 +9,14 @@ from dmponline import DMPonline
 
 
 # ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+# Only DMPs using this template will be exported.
+TARGET_TEMPLATE = "Hogeschool Rotterdam (HR) Template"
+
+
+# ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
 
@@ -82,8 +90,7 @@ def get_answer_text(question):
             if value is not None:
                 return str(value)
 
-        # Unknown structure:
-        # Keep the information instead of losing it.
+        # Unknown structure
         return str(answer)
 
     # List / tuple answer
@@ -129,6 +136,109 @@ def find_section(sections, section_number):
 
 
 # ---------------------------------------------------------------------------
+# Template helper
+# ---------------------------------------------------------------------------
+
+
+def get_template_name(plan):
+    """
+    Try to retrieve the template name from a DMPonline plan.
+
+    DMPonline responses can contain the template information in slightly
+    different structures, so this function checks several possibilities.
+
+    Returns:
+        str: Template name if found, otherwise "".
+    """
+
+    template = plan.get("template")
+
+    if template is None:
+        return ""
+
+    # ---------------------------------------------------------------
+    # Template is simply a string
+    # ---------------------------------------------------------------
+
+    if isinstance(template, str):
+        return template.strip()
+
+    # ---------------------------------------------------------------
+    # Template is a dictionary
+    # ---------------------------------------------------------------
+
+    if isinstance(template, dict):
+
+        # Most likely fields
+        for key in (
+            "title",
+            "name",
+            "text",
+            "label",
+        ):
+
+            value = template.get(key)
+
+            if value:
+                return str(value).strip()
+
+        # Sometimes the name may be nested
+        nested_template = template.get("template")
+
+        if isinstance(nested_template, dict):
+
+            for key in (
+                "title",
+                "name",
+                "text",
+                "label",
+            ):
+
+                value = nested_template.get(key)
+
+                if value:
+                    return str(value).strip()
+
+        # Sometimes template information can contain an ID and title
+        # inside another object.
+        for value in template.values():
+
+            if isinstance(value, dict):
+
+                for key in (
+                    "title",
+                    "name",
+                    "text",
+                    "label",
+                ):
+
+                    nested_value = value.get(key)
+
+                    if nested_value:
+                        return str(nested_value).strip()
+
+    return ""
+
+
+def plan_uses_target_template(plan, target_template):
+    """
+    Check whether a DMP uses the requested template.
+
+    Matching is case-insensitive and ignores leading/trailing whitespace.
+    """
+
+    template_name = get_template_name(plan)
+
+    if not template_name:
+        return False
+
+    return (
+        template_name.strip().lower()
+        == target_template.strip().lower()
+    )
+
+
+# ---------------------------------------------------------------------------
 # Retrieve all DMPs
 # ---------------------------------------------------------------------------
 
@@ -141,7 +251,9 @@ def get_all_plans(api, include_tests=True):
     The DMPonline v0 API paginates the plans endpoint.
     """
 
-    logging.info("Retrieving all DMPonline plans...")
+    logging.info(
+        "Retrieving all DMPonline plans..."
+    )
 
     all_plans = []
 
@@ -212,6 +324,78 @@ def get_all_plans(api, include_tests=True):
 
 
 # ---------------------------------------------------------------------------
+# Filter DMPs by template
+# ---------------------------------------------------------------------------
+
+
+def filter_plans_by_template(plans, target_template):
+    """
+    Return only plans that use the requested DMPonline template.
+    """
+
+    logging.info(
+        "Filtering plans using template: %s",
+        target_template,
+    )
+
+    matching_plans = []
+
+    template_counts = {}
+
+    for plan in plans:
+
+        template_name = get_template_name(plan)
+
+        if template_name:
+
+            template_counts[template_name] = (
+                template_counts.get(template_name, 0) + 1
+            )
+
+        if plan_uses_target_template(
+            plan,
+            target_template,
+        ):
+
+            matching_plans.append(plan)
+
+    # ---------------------------------------------------------------
+    # Logging
+    # ---------------------------------------------------------------
+
+    logging.info(
+        "Found %s plans using template '%s'.",
+        len(matching_plans),
+        target_template,
+    )
+
+    logging.info(
+        "Templates found in retrieved plans:"
+    )
+
+    if template_counts:
+
+        for template_name, count in sorted(
+            template_counts.items()
+        ):
+
+            logging.info(
+                "  %s: %s plans",
+                template_name,
+                count,
+            )
+
+    else:
+
+        logging.warning(
+            "No template information was found "
+            "in the plan responses."
+        )
+
+    return matching_plans
+
+
+# ---------------------------------------------------------------------------
 # Excel export
 # ---------------------------------------------------------------------------
 
@@ -223,7 +407,8 @@ def export_all_plans_to_one_excel(
     output_file,
 ):
     """
-    Export the selected section from ALL DMPonline plans into ONE Excel file.
+    Export the selected section from the filtered DMPonline plans
+    into ONE Excel file.
 
     Excel structure:
 
@@ -231,13 +416,12 @@ def export_all_plans_to_one_excel(
         -----------------------------------------------------
         DMP A (123)   | Answer 1   | Answer 2   | Answer 3
         DMP B (456)   | Answer 1   | Answer 2   | Answer 3
-        DMP C (789)   | Answer 1   | Answer 2   | Answer 3
 
     Each DMP gets one row.
 
     Each question gets one column.
 
-    The answer is placed directly below its question.
+    The answer is placed directly under its question.
     """
 
     logging.info(
@@ -252,10 +436,7 @@ def export_all_plans_to_one_excel(
     worksheet.title = "All DMPs"
 
     # -----------------------------------------------------------------------
-    # We first collect ALL DMP information.
-    #
-    # This is important because we need to know all questions before we
-    # create the Excel columns.
+    # Collect all DMP information
     # -----------------------------------------------------------------------
 
     all_questions = []
@@ -284,12 +465,15 @@ def export_all_plans_to_one_excel(
             or f"DMP {plan_id}"
         )
 
+        template_name = get_template_name(plan)
+
         logging.info(
-            "Processing plan %s/%s: ID=%s | %s",
+            "Processing plan %s/%s: ID=%s | %s | Template=%s",
             index,
             len(plans),
             plan_id,
             plan_title,
+            template_name,
         )
 
         if not plan_id:
@@ -417,15 +601,7 @@ def export_all_plans_to_one_excel(
                 )
 
                 # -----------------------------------------------------------
-                # Create the Excel header.
-                #
-                # Example:
-                #
-                # 1.1 RAiD
-                # 1.2 Project type
-                # 1.3 Project title
-                #
-                # There is NO "Question" or "Answer" header.
+                # Create Excel header
                 # -----------------------------------------------------------
 
                 if question_number:
@@ -448,9 +624,7 @@ def export_all_plans_to_one_excel(
                 ] = answer_text
 
                 # -----------------------------------------------------------
-                # Add question to global question list.
-                #
-                # Each question becomes one Excel column.
+                # Add question to global question list
                 # -----------------------------------------------------------
 
                 if question_key not in question_keys:
@@ -686,7 +860,6 @@ def format_combined_worksheet(
 
         cell.border = thin_border
 
-    # Make the header tall enough for long questions.
     ws.row_dimensions[1].height = 100
 
     # -----------------------------------------------------------------------
@@ -715,10 +888,8 @@ def format_combined_worksheet(
     # Column widths
     # -----------------------------------------------------------------------
 
-    # DMP name + ID
     ws.column_dimensions["A"].width = 40
 
-    # Question columns
     for column_index in range(
         2,
         number_of_questions + 2,
@@ -748,8 +919,6 @@ def format_combined_worksheet(
 
     # -----------------------------------------------------------------------
     # Freeze panes
-    #
-    # Keeps the DMP name and header visible while scrolling.
     # -----------------------------------------------------------------------
 
     ws.freeze_panes = "B2"
@@ -783,8 +952,9 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "Export a selected section from "
-            "ALL DMPonline plans into ONE "
-            "horizontally structured Excel file."
+            "DMPonline plans using the "
+            f"'{TARGET_TEMPLATE}' template "
+            "into ONE Excel file."
         )
     )
 
@@ -835,10 +1005,10 @@ def main():
         "-o",
         "--output",
         dest="output_file",
-        default="DMP_all_plans.xlsx",
+        default="DMP_HR_Template_plans.xlsx",
         help=(
             "Excel file to create. "
-            "Default: DMP_all_plans.xlsx"
+            "Default: DMP_HR_Template_plans.xlsx"
         ),
     )
 
@@ -908,11 +1078,29 @@ def main():
         return
 
     # -----------------------------------------------------------------------
-    # Export all plans into ONE workbook
+    # Filter by template
+    # -----------------------------------------------------------------------
+
+    filtered_plans = filter_plans_by_template(
+        plans=plans,
+        target_template=TARGET_TEMPLATE,
+    )
+
+    if not filtered_plans:
+
+        logging.warning(
+            "No DMPs were found using the template: %s",
+            TARGET_TEMPLATE,
+        )
+
+        return
+
+    # -----------------------------------------------------------------------
+    # Export filtered plans into ONE workbook
     # -----------------------------------------------------------------------
 
     export_all_plans_to_one_excel(
-        plans=plans,
+        plans=filtered_plans,
         api=api,
         section_number=args.section_number,
         output_file=args.output_file,
