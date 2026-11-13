@@ -1,3 +1,10 @@
+# Micha documentation notes
+
+run: 
+```shell
+python .\src\HR_generate_plan_overview_HR_template.py -t APICODE -u EMAIL -o DMP_ALL_VersionNumber.xlsx
+```
+
 # DMPonline
 
 A Python interface to the DMPonline API.
