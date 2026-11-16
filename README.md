@@ -1,36 +1,63 @@
-# Micha documentation notes
+# DMPonline (HR Template) Exporter
 
-run: 
-```shell
-python .\src\HR_generate_plan_overview_HR_template.py -t APICODE -u EMAIL -o DMP_ALL_VersionNumber.xlsx
+This Repository contains pythin code meant for datastewards or other professionals who aim to analyze DMP's. This code is based on Kees den Heijers code from TU delft. See [https://github.com/TU-Delft-DCC/dmponline](https://github.com/TU-Delft-DCC/dmponline) for more information. For this script we are using the **Hogeschool Rotterdam (HR) Template** from DMPonline that was created by the Rotterdam university of applied sciences.
+
+## Features
+
+- Export your DMPS into Excel from DMPonline
+- Combine all existing DMP's with the same template in one Excel file
+- Include comments in answers 
+- Filter on different answers so you can analyze your DMP's 
+
+## Requirements
+
+- Python
+- DMPonline API token
+- DMPonline Python client
+- openpyxl
+
+Install openpyxl:
+
+```bash
+pip install openpyxl
 ```
 
-# DMPonline
+## Usage
 
-A Python interface to the DMPonline API.
-For API documentation, see [https://github.com/DMPRoadmap/roadmap/wiki/API-documentation](https://github.com/DMPRoadmap/roadmap/wiki/API-documentation).
+Run the script using:
 
-Installation:
-```shell
-pip install dmponline
+```bash
+python HR_generate_plan_overview_HR_template_all_sections_clean_answers.py -t YOUR_API_TOKEN -u YOUR_EMAIL -o DMP_overview.xlsx
 ```
 
-Usage example:
+### Exclude test plans
 
-```python
-from dmponline import DMPonline
+Add `--exclude-tests` to exclude test plans:
 
-# initialize DMPonline class
-dmp_api = DMPonline(<YOUR-DMPONLINE-API-TOKEN>, token_user=<YOUR-DMPONLINE-USER-EMAIL>)
-# retreive pandas dataframe with all DMPs in your organization
-dmps = dmp_api.plan_statistics(params={'remove_tests': 'false'})
+```bash
+python HR_generate_plan_overview_HR_template_all_sections_clean_answers.py -t YOUR_API_TOKEN -u YOUR_EMAIL -o DMP_overview.xlsx --exclude-tests 
 ```
 
-## Command line
-The package also ships a command line script to retreive an overview of all questions in a particular DMP.
+## Excel Output
 
-Usage example:
+The script generates one Excel file containing:
 
-```shell
-question_overview -i DMPONLINE_PLAN_ID -t <YOUR-DMPONLINE-API-TOKEN>
-```
+- One row per DMP.
+- One column per question.
+- DMP name and ID.
+- Answers and additional comments.
+
+## Command-line options
+
+| Option | Description |
+|---|---|
+| `-t` | DMPonline API token (required) |
+| `-u` | User email address (required) |
+| `-o` | Output Excel filename (required?) |
+| `--exclude-tests` | Exclude test plans |
+
+## Notes
+
+text still needed
+
+
