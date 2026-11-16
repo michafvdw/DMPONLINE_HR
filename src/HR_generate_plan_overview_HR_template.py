@@ -15,9 +15,6 @@ from dmponline import DMPonline
 # Only DMPs using this template will be exported.
 TARGET_TEMPLATE = "Hogeschool Rotterdam (HR) Template"
 
-# Default Excel output file.
-DEFAULT_OUTPUT_FILE = "DMP_HR_Template_all_questions.xlsx"
-
 
 # ---------------------------------------------------------------------------
 # Helper functions
@@ -54,6 +51,7 @@ def get_answer_text(question):
 
     # Dictionary answer
     if isinstance(answer, dict):
+
         # Option-based answers
         options = answer.get("options")
 
@@ -61,6 +59,7 @@ def get_answer_text(question):
             option_texts = []
 
             for option in options:
+
                 if isinstance(option, dict):
                     text = (
                         option.get("text")
@@ -71,6 +70,7 @@ def get_answer_text(question):
 
                     if text is not None:
                         option_texts.append(str(text))
+
                 else:
                     option_texts.append(str(option))
 
@@ -95,10 +95,13 @@ def get_answer_text(question):
 
     # List / tuple answer
     if isinstance(answer, (list, tuple)):
+
         values = []
 
         for item in answer:
+
             if isinstance(item, dict):
+
                 value = (
                     item.get("text")
                     or item.get("label")
@@ -108,6 +111,7 @@ def get_answer_text(question):
 
                 if value is not None:
                     values.append(str(value))
+
             else:
                 values.append(str(item))
 
@@ -116,101 +120,23 @@ def get_answer_text(question):
     return str(answer)
 
 
-# ---------------------------------------------------------------------------
-# Question extraction
-# ---------------------------------------------------------------------------
-
-
-def extract_all_questions(sections):
+def find_section(sections, section_number):
     """
-    Extract all questions from all sections of a DMP.
-
-    DMPonline can structure questions inside normal sections as well as
-    nested sections/subsections. The previous version only looked at:
-
-        section["questions"]
-
-    That can cause the export to stop after an earlier section, for example
-    around question 3.1, when later questions are stored in nested sections.
-
-    This function recursively walks through the section hierarchy and collects
-    every question found in a ``questions`` list.
-
-    Returns:
-        list: Questions in the order in which they occur in the DMP.
+    Find a section by its section number.
     """
 
-    all_questions = []
+    for section in sections:
 
-    # Different DMPonline responses may use different names for nested
-    # sections. These are the keys we explicitly recognise as section-like
-    # containers.
-    nested_section_keys = {
-        "sections",
-        "subsections",
-        "children",
-        "question_groups",
-        "groups",
-    }
+        number = section.get("number")
 
-    def process_section(section, path=""):
-        if not isinstance(section, dict):
-            return
+        if str(number) == str(section_number):
+            return section
 
-        section_number = section.get("number", "")
-        section_title = (
-            section.get("title")
-            or section.get("name")
-            or section.get("text")
-            or ""
-        )
-
-        current_path = path
-        if section_number:
-            current_path = f"{path}.{section_number}" if path else str(section_number)
-        elif section_title:
-            current_path = f"{path} > {section_title}" if path else str(section_title)
-
-        # Questions directly contained in this section.
-        questions = section.get("questions") or []
-
-        if isinstance(questions, list):
-            for question in questions:
-                if isinstance(question, dict):
-                    # Store a little context on the question so that logging
-                    # can tell us exactly where it came from. This does not
-                    # change the original question text used as the Excel
-                    # header.
-                    question_copy = dict(question)
-                    question_copy["_section_path"] = current_path
-                    all_questions.append(question_copy)
-
-        # Recursively process known nested-section containers.
-        for key in nested_section_keys:
-            nested = section.get(key)
-
-            if not nested:
-                continue
-
-            if isinstance(nested, dict):
-                process_section(nested, current_path)
-
-            elif isinstance(nested, list):
-                for nested_section in nested:
-                    if isinstance(nested_section, dict):
-                        process_section(nested_section, current_path)
-
-    if isinstance(sections, list):
-        for section in sections:
-            process_section(section)
-    elif isinstance(sections, dict):
-        process_section(sections)
-
-    return all_questions
+    return None
 
 
 # ---------------------------------------------------------------------------
-# Template helpers
+# Template helper
 # ---------------------------------------------------------------------------
 
 
@@ -230,33 +156,44 @@ def get_template_name(plan):
     if template is None:
         return ""
 
+    # ---------------------------------------------------------------
     # Template is simply a string
+    # ---------------------------------------------------------------
+
     if isinstance(template, str):
         return template.strip()
 
+    # ---------------------------------------------------------------
     # Template is a dictionary
+    # ---------------------------------------------------------------
+
     if isinstance(template, dict):
+
+        # Most likely fields
         for key in (
             "title",
             "name",
             "text",
             "label",
         ):
+
             value = template.get(key)
 
             if value:
                 return str(value).strip()
 
-        # Sometimes the name may be nested.
+        # Sometimes the name may be nested
         nested_template = template.get("template")
 
         if isinstance(nested_template, dict):
+
             for key in (
                 "title",
                 "name",
                 "text",
                 "label",
             ):
+
                 value = nested_template.get(key)
 
                 if value:
@@ -265,20 +202,22 @@ def get_template_name(plan):
         # Sometimes template information can contain an ID and title
         # inside another object.
         for value in template.values():
+
             if isinstance(value, dict):
+
                 for key in (
                     "title",
                     "name",
                     "text",
                     "label",
                 ):
+
                     nested_value = value.get(key)
 
                     if nested_value:
                         return str(nested_value).strip()
 
     return ""
-
 
 
 def plan_uses_target_template(plan, target_template):
@@ -293,7 +232,10 @@ def plan_uses_target_template(plan, target_template):
     if not template_name:
         return False
 
-    return template_name.strip().lower() == target_template.strip().lower()
+    return (
+        template_name.strip().lower()
+        == target_template.strip().lower()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -309,13 +251,20 @@ def get_all_plans(api, include_tests=True):
     The DMPonline v0 API paginates the plans endpoint.
     """
 
-    logging.info("Retrieving all DMPonline plans...")
+    logging.info(
+        "Retrieving all DMPonline plans..."
+    )
 
     all_plans = []
+
     page = 1
 
     while True:
-        logging.info("Retrieving plans page %s...", page)
+
+        logging.info(
+            "Retrieving plans page %s...",
+            page,
+        )
 
         params = {
             "page": page,
@@ -332,15 +281,20 @@ def get_all_plans(api, include_tests=True):
 
         # Normally DMPonline v0 returns a list.
         if isinstance(parsed, list):
+
             page_plans = parsed
+
         elif isinstance(parsed, dict):
+
             page_plans = (
                 parsed.get("data")
                 or parsed.get("items")
                 or parsed.get("plans")
                 or []
             )
+
         else:
+
             raise ValueError(
                 f"Unexpected response type while retrieving page {page}: "
                 f"{type(parsed).__name__}"
@@ -352,7 +306,8 @@ def get_all_plans(api, include_tests=True):
         all_plans.extend(page_plans)
 
         logging.info(
-            "Page %s: found %s plans (total so far: %s).",
+            "Page %s: found %s plans "
+            "(total so far: %s).",
             page,
             len(page_plans),
             len(all_plans),
@@ -360,7 +315,10 @@ def get_all_plans(api, include_tests=True):
 
         page += 1
 
-    logging.info("Total plans found: %s", len(all_plans))
+    logging.info(
+        "Total plans found: %s",
+        len(all_plans),
+    )
 
     return all_plans
 
@@ -381,18 +339,29 @@ def filter_plans_by_template(plans, target_template):
     )
 
     matching_plans = []
+
     template_counts = {}
 
     for plan in plans:
+
         template_name = get_template_name(plan)
 
         if template_name:
+
             template_counts[template_name] = (
                 template_counts.get(template_name, 0) + 1
             )
 
-        if plan_uses_target_template(plan, target_template):
+        if plan_uses_target_template(
+            plan,
+            target_template,
+        ):
+
             matching_plans.append(plan)
+
+    # ---------------------------------------------------------------
+    # Logging
+    # ---------------------------------------------------------------
 
     logging.info(
         "Found %s plans using template '%s'.",
@@ -400,14 +369,27 @@ def filter_plans_by_template(plans, target_template):
         target_template,
     )
 
-    logging.info("Templates found in retrieved plans:")
+    logging.info(
+        "Templates found in retrieved plans:"
+    )
 
     if template_counts:
-        for template_name, count in sorted(template_counts.items()):
-            logging.info("  %s: %s plans", template_name, count)
+
+        for template_name, count in sorted(
+            template_counts.items()
+        ):
+
+            logging.info(
+                "  %s: %s plans",
+                template_name,
+                count,
+            )
+
     else:
+
         logging.warning(
-            "No template information was found in the plan responses."
+            "No template information was found "
+            "in the plan responses."
         )
 
     return matching_plans
@@ -418,25 +400,28 @@ def filter_plans_by_template(plans, target_template):
 # ---------------------------------------------------------------------------
 
 
-def export_all_plans_to_one_excel(plans, api, output_file):
+def export_all_plans_to_one_excel(
+    plans,
+    api,
+    section_number,
+    output_file,
+):
     """
-    Export ALL questions from ALL sections of the filtered DMPonline plans
+    Export the selected section from the filtered DMPonline plans
     into ONE Excel file.
 
     Excel structure:
 
-        DMP Name + ID | 1.1 Question | 1.2 Question | 2.1 Question | ...
-        -----------------------------------------------------------------
-        DMP A (123)   | Answer        | Answer        | Answer        | ...
-        DMP B (456)   | Answer        | Answer        | Answer        | ...
+        DMP Name + ID | Question 1 | Question 2 | Question 3
+        -----------------------------------------------------
+        DMP A (123)   | Answer 1   | Answer 2   | Answer 3
+        DMP B (456)   | Answer 1   | Answer 2   | Answer 3
 
     Each DMP gets one row.
+
     Each question gets one column.
 
-    Important:
-        The question number is NOT added separately. The question text from
-        DMPonline is used exactly as the Excel header. This prevents headers
-        such as "2 1.2 ..." and keeps them as "1.2 ...".
+    The answer is placed directly under its question.
     """
 
     logging.info(
@@ -445,7 +430,9 @@ def export_all_plans_to_one_excel(plans, api, output_file):
     )
 
     workbook = Workbook()
+
     worksheet = workbook.active
+
     worksheet.title = "All DMPs"
 
     # -----------------------------------------------------------------------
@@ -453,20 +440,31 @@ def export_all_plans_to_one_excel(plans, api, output_file):
     # -----------------------------------------------------------------------
 
     all_questions = []
+
     question_keys = set()
+
     dmp_data = []
 
     successful = 0
+
     failed = 0
 
     # -----------------------------------------------------------------------
     # Process every DMP
     # -----------------------------------------------------------------------
 
-    for index, plan in enumerate(plans, start=1):
+    for index, plan in enumerate(
+        plans,
+        start=1,
+    ):
+
         plan_id = plan.get("id")
 
-        plan_title = plan.get("title") or f"DMP {plan_id}"
+        plan_title = (
+            plan.get("title")
+            or f"DMP {plan_id}"
+        )
+
         template_name = get_template_name(plan)
 
         logging.info(
@@ -479,11 +477,17 @@ def export_all_plans_to_one_excel(plans, api, output_file):
         )
 
         if not plan_id:
-            logging.error("Skipping plan without an ID.")
+
+            logging.error(
+                "Skipping plan without an ID."
+            )
+
             failed += 1
+
             continue
 
         try:
+
             # ---------------------------------------------------------------
             # Retrieve the complete DMP
             # ---------------------------------------------------------------
@@ -497,6 +501,7 @@ def export_all_plans_to_one_excel(plans, api, output_file):
             )
 
             if not parsed:
+
                 raise ValueError(
                     f"No DMP content found for plan ID {plan_id}."
                 )
@@ -506,111 +511,131 @@ def export_all_plans_to_one_excel(plans, api, output_file):
             # ---------------------------------------------------------------
 
             try:
+
                 full_plan = parsed[0]
-                plan_content = full_plan["plan_content"][0]
-                sections = plan_content["sections"]
-            except (IndexError, KeyError, TypeError) as exc:
+
+                plan_content = full_plan[
+                    "plan_content"
+                ][0]
+
+                sections = plan_content[
+                    "sections"
+                ]
+
+            except (
+                IndexError,
+                KeyError,
+                TypeError,
+            ) as exc:
+
                 raise ValueError(
-                    f"Could not find DMP sections for plan {plan_id}."
+                    f"Could not find DMP sections "
+                    f"for plan {plan_id}."
                 ) from exc
 
             # ---------------------------------------------------------------
-            # Extract ALL questions from ALL sections, including nested ones
+            # Find requested section
             # ---------------------------------------------------------------
 
-            questions = extract_all_questions(sections)
-
-            if not questions:
-                logging.warning(
-                    "Plan %s contains no questions in its section structure.",
-                    plan_id,
-                )
-
-            actual_plan_title = full_plan.get("title") or plan_title
-
-            # ---------------------------------------------------------------
-            # Log the questions found for this DMP
-            # ---------------------------------------------------------------
-
-            logging.info(
-                "Plan %s: found %s questions across all sections.",
-                plan_id,
-                len(questions),
+            selected_section = find_section(
+                sections,
+                section_number,
             )
 
-            for question in questions:
-                question_text = question.get("text", "")
+            if selected_section is None:
 
-                if question_text is None:
-                    question_text = ""
+                available_sections = [
+                    str(section.get("number"))
+                    for section in sections
+                ]
 
-                question_text = str(question_text).strip()
-
-                section_path = question.get("_section_path", "")
-
-                logging.debug(
-                    "Plan %s question: [%s] %s",
-                    plan_id,
-                    section_path,
-                    question_text,
+                raise ValueError(
+                    f"Section {section_number} "
+                    f"was not found. "
+                    f"Available sections: "
+                    f"{', '.join(available_sections)}"
                 )
+
+            questions = (
+                selected_section.get("questions")
+                or []
+            )
+
+            actual_plan_title = (
+                full_plan.get("title")
+                or plan_title
+            )
 
             # ---------------------------------------------------------------
             # Store answers for this DMP
             # ---------------------------------------------------------------
 
             answers_by_question = {}
-            dmp_question_count = 0
 
             for question in questions:
+
+                # -----------------------------------------------------------
+                # Question number
+                # -----------------------------------------------------------
+
+                question_number = question.get(
+                    "number",
+                    "",
+                )
+
                 # -----------------------------------------------------------
                 # Question title/text
                 # -----------------------------------------------------------
 
-                question_text = question.get("text", "")
-
-                if question_text is None:
-                    question_text = ""
-
-                question_text = str(question_text).strip()
-
-                # Ignore question objects without usable text.
-                if not question_text:
-                    logging.debug(
-                        "Plan %s: skipping question without text.",
-                        plan_id,
-                    )
-                    continue
-
-                # -----------------------------------------------------------
-                # IMPORTANT:
-                # Use the question text itself as the Excel header.
-                # Do NOT prepend question["number"].
-                #
-                # This changes:
-                #     2 1.2 Projecttype...
-                # into:
-                #     1.2 Projecttype...
-                # -----------------------------------------------------------
-
-                question_key = question_text
+                question_text = question.get(
+                    "text",
+                    "",
+                )
 
                 # -----------------------------------------------------------
                 # Answer
                 # -----------------------------------------------------------
 
-                answer_text = get_answer_text(question)
-
-                answers_by_question[question_key] = answer_text
-                dmp_question_count += 1
+                answer_text = get_answer_text(
+                    question
+                )
 
                 # -----------------------------------------------------------
-                # Add question to the global question list
+                # Create Excel header
+                # -----------------------------------------------------------
+
+                if question_number:
+
+                    question_key = (
+                        f"{question_number}. "
+                        f"{question_text}"
+                    )
+
+                else:
+
+                    question_key = question_text
+
+                # -----------------------------------------------------------
+                # Store answer under this question
+                # -----------------------------------------------------------
+
+                answers_by_question[
+                    question_key
+                ] = answer_text
+
+                # -----------------------------------------------------------
+                # Add question to global question list
                 # -----------------------------------------------------------
 
                 if question_key not in question_keys:
-                    question_keys.add(question_key)
-                    all_questions.append(question_key)
+
+                    question_keys.add(
+                        question_key
+                    )
+
+                    all_questions.append(
+                        question_key
+                    )
 
             # ---------------------------------------------------------------
             # Store the DMP
@@ -627,15 +652,16 @@ def export_all_plans_to_one_excel(plans, api, output_file):
             successful += 1
 
             logging.info(
-                "Plan %s processed successfully: %s usable questions.",
+                "Plan %s processed: %s questions.",
                 plan_id,
-                dmp_question_count,
+                len(questions),
             )
 
         except Exception as exc:
+
             failed += 1
 
-            logging.exception(
+            logging.error(
                 "Could not process plan %s (%s): %s",
                 plan_id,
                 plan_title,
@@ -649,13 +675,23 @@ def export_all_plans_to_one_excel(plans, api, output_file):
     # Create the header row
     # -----------------------------------------------------------------------
 
+    # Column A:
+    # DMP name + ID
+
     worksheet.cell(
         row=1,
         column=1,
         value="DMP Name + ID",
     )
 
-    for column_index, question in enumerate(all_questions, start=2):
+    # Columns B onward:
+    # One question per column.
+
+    for column_index, question in enumerate(
+        all_questions,
+        start=2,
+    ):
+
         worksheet.cell(
             row=1,
             column=column_index,
@@ -666,13 +702,24 @@ def export_all_plans_to_one_excel(plans, api, output_file):
     # Add DMP rows
     # -----------------------------------------------------------------------
 
-    for row_index, dmp in enumerate(dmp_data, start=2):
+    for row_index, dmp in enumerate(
+        dmp_data,
+        start=2,
+    ):
+
         plan_id = dmp["plan_id"]
+
         plan_title = dmp["plan_title"]
+
         answers = dmp["answers"]
 
+        # ---------------------------------------------------------------
         # Column A = DMP name + ID
-        dmp_name_id = f"{plan_title} ({plan_id})"
+        # ---------------------------------------------------------------
+
+        dmp_name_id = (
+            f"{plan_title} ({plan_id})"
+        )
 
         worksheet.cell(
             row=row_index,
@@ -680,9 +727,19 @@ def export_all_plans_to_one_excel(plans, api, output_file):
             value=dmp_name_id,
         )
 
+        # ---------------------------------------------------------------
         # Columns B onward = answers
-        for column_index, question in enumerate(all_questions, start=2):
-            answer = answers.get(question, "")
+        # ---------------------------------------------------------------
+
+        for column_index, question in enumerate(
+            all_questions,
+            start=2,
+        ):
+
+            answer = answers.get(
+                question,
+                "",
+            )
 
             worksheet.cell(
                 row=row_index,
@@ -703,14 +760,20 @@ def export_all_plans_to_one_excel(plans, api, output_file):
     # Create output directory
     # -----------------------------------------------------------------------
 
-    output_directory = os.path.dirname(os.path.abspath(output_file))
-    os.makedirs(output_directory, exist_ok=True)
+    os.makedirs(
+        os.path.dirname(
+            os.path.abspath(output_file)
+        ),
+        exist_ok=True,
+    )
 
     # -----------------------------------------------------------------------
     # Save workbook
     # -----------------------------------------------------------------------
 
-    workbook.save(output_file)
+    workbook.save(
+        output_file
+    )
 
     logging.info(
         "Combined Excel report written to: %s",
@@ -723,8 +786,10 @@ def export_all_plans_to_one_excel(plans, api, output_file):
         len(plans),
     )
 
-    logging.info("Failed: %s plans.", failed)
-    logging.info("Total unique question columns: %s", len(all_questions))
+    logging.info(
+        "Failed: %s plans.",
+        failed,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -732,7 +797,10 @@ def export_all_plans_to_one_excel(plans, api, output_file):
 # ---------------------------------------------------------------------------
 
 
-def format_combined_worksheet(ws, number_of_questions):
+def format_combined_worksheet(
+    ws,
+    number_of_questions,
+):
     """
     Format the horizontally structured worksheet.
     """
@@ -756,10 +824,22 @@ def format_combined_worksheet(ws, number_of_questions):
     )
 
     thin_border = Border(
-        left=Side(style="thin", color="D9D9D9"),
-        right=Side(style="thin", color="D9D9D9"),
-        top=Side(style="thin", color="D9D9D9"),
-        bottom=Side(style="thin", color="D9D9D9"),
+        left=Side(
+            style="thin",
+            color="D9D9D9",
+        ),
+        right=Side(
+            style="thin",
+            color="D9D9D9",
+        ),
+        top=Side(
+            style="thin",
+            color="D9D9D9",
+        ),
+        bottom=Side(
+            style="thin",
+            color="D9D9D9",
+        ),
     )
 
     # -----------------------------------------------------------------------
@@ -767,13 +847,17 @@ def format_combined_worksheet(ws, number_of_questions):
     # -----------------------------------------------------------------------
 
     for cell in ws[1]:
+
         cell.fill = header_fill
+
         cell.font = header_font
+
         cell.alignment = Alignment(
             horizontal="center",
             vertical="center",
             wrap_text=True,
         )
+
         cell.border = thin_border
 
     ws.row_dimensions[1].height = 100
@@ -782,13 +866,19 @@ def format_combined_worksheet(ws, number_of_questions):
     # Data rows
     # -----------------------------------------------------------------------
 
-    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+    for row in ws.iter_rows(
+        min_row=2,
+        max_row=ws.max_row,
+    ):
+
         for cell in row:
+
             cell.alignment = Alignment(
                 horizontal="left",
                 vertical="top",
                 wrap_text=True,
             )
+
             cell.border = thin_border
 
         # DMP name + ID is bold.
@@ -800,20 +890,32 @@ def format_combined_worksheet(ws, number_of_questions):
 
     ws.column_dimensions["A"].width = 40
 
-    for column_index in range(2, number_of_questions + 2):
+    for column_index in range(
+        2,
+        number_of_questions + 2,
+    ):
+
         column_letter = ws.cell(
             row=1,
             column=column_index,
         ).column_letter
 
-        ws.column_dimensions[column_letter].width = 35
+        ws.column_dimensions[
+            column_letter
+        ].width = 35
 
     # -----------------------------------------------------------------------
     # Row heights
     # -----------------------------------------------------------------------
 
-    for row_number in range(2, ws.max_row + 1):
-        ws.row_dimensions[row_number].height = 100
+    for row_number in range(
+        2,
+        ws.max_row + 1,
+    ):
+
+        ws.row_dimensions[
+            row_number
+        ].height = 100
 
     # -----------------------------------------------------------------------
     # Freeze panes
@@ -825,13 +927,19 @@ def format_combined_worksheet(ws, number_of_questions):
     # Auto filter
     # -----------------------------------------------------------------------
 
-    if ws.max_row >= 2 and number_of_questions >= 1:
+    if (
+        ws.max_row >= 2
+        and number_of_questions >= 1
+    ):
+
         last_column = ws.cell(
             row=1,
             column=number_of_questions + 1,
         ).column_letter
 
-        ws.auto_filter.ref = f"A1:{last_column}{ws.max_row}"
+        ws.auto_filter.ref = (
+            f"A1:{last_column}{ws.max_row}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -840,10 +948,13 @@ def format_combined_worksheet(ws, number_of_questions):
 
 
 def main():
+
     parser = argparse.ArgumentParser(
         description=(
-            "Export all questions from all sections of DMPonline plans "
-            f"using the '{TARGET_TEMPLATE}' template into ONE Excel file."
+            "Export a selected section from "
+            "DMPonline plans using the "
+            f"'{TARGET_TEMPLATE}' template "
+            "into ONE Excel file."
         )
     )
 
@@ -872,6 +983,21 @@ def main():
     )
 
     # -----------------------------------------------------------------------
+    # Section number
+    # -----------------------------------------------------------------------
+
+    parser.add_argument(
+        "-s",
+        "--section",
+        dest="section_number",
+        required=True,
+        help=(
+            "Section number to export, "
+            "e.g. 1, 2, 3, 4 or 5"
+        ),
+    )
+
+    # -----------------------------------------------------------------------
     # Output file
     # -----------------------------------------------------------------------
 
@@ -879,10 +1005,10 @@ def main():
         "-o",
         "--output",
         dest="output_file",
-        default=DEFAULT_OUTPUT_FILE,
+        default="DMP_HR_Template_plans.xlsx",
         help=(
             "Excel file to create. "
-            f"Default: {DEFAULT_OUTPUT_FILE}"
+            "Default: DMP_HR_Template_plans.xlsx"
         ),
     )
 
@@ -911,14 +1037,22 @@ def main():
     # Validate output extension
     # -----------------------------------------------------------------------
 
-    if os.path.splitext(args.output_file)[1].lower() != ".xlsx":
-        raise ValueError("The output file must have an .xlsx extension.")
+    if os.path.splitext(
+        args.output_file
+    )[1].lower() != ".xlsx":
+
+        raise ValueError(
+            "The output file must have "
+            "an .xlsx extension."
+        )
 
     # -----------------------------------------------------------------------
     # Create DMPonline API client
     # -----------------------------------------------------------------------
 
-    logging.info("Connecting to DMPonline...")
+    logging.info(
+        "Connecting to DMPonline..."
+    )
 
     api = DMPonline(
         token=args.token,
@@ -935,7 +1069,12 @@ def main():
     )
 
     if not plans:
-        logging.warning("No plans were returned by the DMPonline API.")
+
+        logging.warning(
+            "No plans were returned by "
+            "the DMPonline API."
+        )
+
         return
 
     # -----------------------------------------------------------------------
@@ -948,10 +1087,12 @@ def main():
     )
 
     if not filtered_plans:
+
         logging.warning(
             "No DMPs were found using the template: %s",
             TARGET_TEMPLATE,
         )
+
         return
 
     # -----------------------------------------------------------------------
@@ -961,6 +1102,7 @@ def main():
     export_all_plans_to_one_excel(
         plans=filtered_plans,
         api=api,
+        section_number=args.section_number,
         output_file=args.output_file,
     )
 
