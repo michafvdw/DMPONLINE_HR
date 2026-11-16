@@ -1,6 +1,8 @@
 import argparse
 import logging
 import os
+import html
+from html.parser import HTMLParser
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -21,17 +23,64 @@ TARGET_TEMPLATE = "Hogeschool Rotterdam (HR) Template"
 # ---------------------------------------------------------------------------
 
 
+class _HTMLTextExtractor(HTMLParser):
+    """Extract visible text from HTML while keeping table/list items readable."""
+
+    BLOCK_TAGS = {
+        "br", "p", "div", "tr", "td", "th", "li", "ul", "ol",
+        "table", "h1", "h2", "h3", "h4", "h5", "h6"
+    }
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+        self.skip_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style"):
+            self.skip_depth += 1
+        elif tag in self.BLOCK_TAGS and self.parts:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style") and self.skip_depth:
+            self.skip_depth -= 1
+        elif tag in self.BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip_depth and data.strip():
+            self.parts.append(data.strip())
+
+
+def clean_answer_text(value):
+    """Turn plain text or HTML answer content into clean readable text."""
+    if value is None:
+        return ""
+
+    text = html.unescape(str(value))
+
+    # Only invoke the HTML parser when the value appears to contain HTML.
+    if "<" in text and ">" in text:
+        parser = _HTMLTextExtractor()
+        try:
+            parser.feed(text)
+            text = " ".join(parser.parts)
+        except Exception:
+            # If parsing fails, retain the original value rather than lose data.
+            pass
+
+    # Normalize whitespace while retaining useful line breaks.
+    lines = [" ".join(line.split()) for line in text.splitlines()]
+    return "\n".join(line for line in lines if line).strip()
+
+
 def get_answer_text(question):
     """
     Convert the answer structure returned by DMPonline into readable text.
 
-    Handles:
-        - free-text answers
-        - scalar answers
-        - option-based answers
-        - multiple selected options
-        - list/tuple answers
-        - dictionary answers
+    HTML markup is removed so selected answers are exported as visible text.
+    Handles free text, scalar values, selected options, lists and dictionaries.
     """
 
     if not question.get("answered"):
@@ -42,82 +91,64 @@ def get_answer_text(question):
     if answer is None:
         return ""
 
-    # String / scalar answer
     if isinstance(answer, str):
-        return answer
+        return clean_answer_text(answer)
 
     if isinstance(answer, (int, float, bool)):
         return str(answer)
 
-    # Dictionary answer
     if isinstance(answer, dict):
-
-        # Option-based answers
         options = answer.get("options")
 
         if options:
             option_texts = []
-
             for option in options:
-
                 if isinstance(option, dict):
-                    text = (
+                    value = (
                         option.get("text")
                         or option.get("label")
                         or option.get("name")
                         or option.get("value")
                     )
-
-                    if text is not None:
-                        option_texts.append(str(text))
-
                 else:
-                    option_texts.append(str(option))
+                    value = option
+
+                if value is not None:
+                    cleaned = clean_answer_text(value)
+                    if cleaned:
+                        option_texts.append(cleaned)
 
             if option_texts:
                 return "\n".join(option_texts)
 
-        # Common text/value fields
-        for key in (
-            "text",
-            "value",
-            "answer",
-            "content",
-            "response",
-        ):
+        for key in ("text", "value", "answer", "content", "response"):
             value = answer.get(key)
-
             if value is not None:
-                return str(value)
+                return clean_answer_text(value)
 
-        # Unknown structure
-        return str(answer)
+        return clean_answer_text(answer)
 
-    # List / tuple answer
     if isinstance(answer, (list, tuple)):
-
         values = []
-
         for item in answer:
-
             if isinstance(item, dict):
-
                 value = (
                     item.get("text")
                     or item.get("label")
                     or item.get("name")
                     or item.get("value")
                 )
-
                 if value is not None:
-                    values.append(str(value))
-
+                    cleaned = clean_answer_text(value)
+                    if cleaned:
+                        values.append(cleaned)
             else:
-                values.append(str(item))
-
+                cleaned = clean_answer_text(item)
+                if cleaned:
+                    values.append(cleaned)
         return "\n".join(values)
 
-    return str(answer)
+    return clean_answer_text(answer)
 
 
 def get_comment_text(question):
