@@ -120,19 +120,45 @@ def get_answer_text(question):
     return str(answer)
 
 
-def find_section(sections, section_number):
-    """
-    Find a section by its section number.
-    """
+def get_comment_text(question):
+    """Extract comment text from common DMPonline comment structures."""
 
-    for section in sections:
+    def extract_text(value):
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, (int, float, bool)):
+            return str(value)
+        if isinstance(value, (list, tuple)):
+            parts = [extract_text(item) for item in value]
+            return "\n".join(part for part in parts if part)
+        if isinstance(value, dict):
+            for key in ("text", "comment", "content", "body", "value", "message"):
+                if value.get(key) is not None:
+                    return extract_text(value[key])
+            for key in ("comments", "items", "data"):
+                if value.get(key) is not None:
+                    return extract_text(value[key])
+        return ""
 
-        number = section.get("number")
+    found_comments = []
 
-        if str(number) == str(section_number):
-            return section
+    def find_comment_fields(value):
+        if isinstance(value, dict):
+            for key, nested_value in value.items():
+                if key.lower() in ("comments", "comment"):
+                    text = extract_text(nested_value)
+                    if text and text not in found_comments:
+                        found_comments.append(text)
+                elif isinstance(nested_value, (dict, list, tuple)):
+                    find_comment_fields(nested_value)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                find_comment_fields(item)
 
-    return None
+    find_comment_fields(question)
+    return "\n\n".join(found_comments)
 
 
 # ---------------------------------------------------------------------------
@@ -403,11 +429,10 @@ def filter_plans_by_template(plans, target_template):
 def export_all_plans_to_one_excel(
     plans,
     api,
-    section_number,
     output_file,
 ):
     """
-    Export the selected section from the filtered DMPonline plans
+    Export all sections from the filtered DMPonline plans
     into ONE Excel file.
 
     Excel structure:
@@ -534,108 +559,52 @@ def export_all_plans_to_one_excel(
                 ) from exc
 
             # ---------------------------------------------------------------
-            # Find requested section
+            # Process questions from every section
             # ---------------------------------------------------------------
-
-            selected_section = find_section(
-                sections,
-                section_number,
-            )
-
-            if selected_section is None:
-
-                available_sections = [
-                    str(section.get("number"))
-                    for section in sections
-                ]
-
-                raise ValueError(
-                    f"Section {section_number} "
-                    f"was not found. "
-                    f"Available sections: "
-                    f"{', '.join(available_sections)}"
-                )
-
-            questions = (
-                selected_section.get("questions")
-                or []
-            )
 
             actual_plan_title = (
                 full_plan.get("title")
                 or plan_title
             )
 
-            # ---------------------------------------------------------------
-            # Store answers for this DMP
-            # ---------------------------------------------------------------
-
             answers_by_question = {}
+            total_questions = 0
 
-            for question in questions:
+            for section in sections:
 
-                # -----------------------------------------------------------
-                # Question number
-                # -----------------------------------------------------------
+                questions = section.get("questions") or []
 
-                question_number = question.get(
-                    "number",
-                    "",
-                )
+                for question in questions:
 
-                # -----------------------------------------------------------
-                # Question title/text
-                # -----------------------------------------------------------
+                    total_questions += 1
 
-                question_text = question.get(
-                    "text",
-                    "",
-                )
+                    # The question text already contains its display number
+                    # (for example, "1.1 ..."). Do not add another number.
+                    question_key = str(
+                        question.get("text") or ""
+                    ).strip()
 
-                # -----------------------------------------------------------
-                # Answer
-                # -----------------------------------------------------------
+                    if not question_key:
+                        question_key = str(
+                            question.get("number") or "Unnamed question"
+                        ).strip()
 
-                answer_text = get_answer_text(
-                    question
-                )
+                    answer_text = get_answer_text(question)
+                    comment_text = get_comment_text(question)
 
-                # -----------------------------------------------------------
-                # Create Excel header
-                # -----------------------------------------------------------
+                    if comment_text:
+                        if answer_text:
+                            answer_text = (
+                                f"{answer_text}\n\nComments:\n{comment_text}"
+                            )
+                        else:
+                            answer_text = f"Comments:\n{comment_text}"
 
-                if question_number:
+                    answers_by_question[question_key] = answer_text
 
-                    question_key = (
-                        f"{question_number}. "
-                        f"{question_text}"
-                    )
-
-                else:
-
-                    question_key = question_text
-
-                # -----------------------------------------------------------
-                # Store answer under this question
-                # -----------------------------------------------------------
-
-                answers_by_question[
-                    question_key
-                ] = answer_text
-
-                # -----------------------------------------------------------
-                # Add question to global question list
-                # -----------------------------------------------------------
-
-                if question_key not in question_keys:
-
-                    question_keys.add(
-                        question_key
-                    )
-
-                    all_questions.append(
-                        question_key
-                    )
+                    if question_key not in question_keys:
+                        question_keys.add(question_key)
+                        all_questions.append(question_key)
 
             # ---------------------------------------------------------------
             # Store the DMP
@@ -654,7 +623,7 @@ def export_all_plans_to_one_excel(
             logging.info(
                 "Plan %s processed: %s questions.",
                 plan_id,
-                len(questions),
+                total_questions,
             )
 
         except Exception as exc:
@@ -951,7 +920,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         description=(
-            "Export a selected section from "
+            "Export all sections from "
             "DMPonline plans using the "
             f"'{TARGET_TEMPLATE}' template "
             "into ONE Excel file."
@@ -980,21 +949,6 @@ def main():
         dest="token_user",
         required=True,
         help="DMPonline user email address",
-    )
-
-    # -----------------------------------------------------------------------
-    # Section number
-    # -----------------------------------------------------------------------
-
-    parser.add_argument(
-        "-s",
-        "--section",
-        dest="section_number",
-        required=True,
-        help=(
-            "Section number to export, "
-            "e.g. 1, 2, 3, 4 or 5"
-        ),
     )
 
     # -----------------------------------------------------------------------
@@ -1102,7 +1056,6 @@ def main():
     export_all_plans_to_one_excel(
         plans=filtered_plans,
         api=api,
-        section_number=args.section_number,
         output_file=args.output_file,
     )
 
